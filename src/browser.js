@@ -11,7 +11,7 @@ import {createPlugin} from 'fusion-core';
 import type {FusionPlugin} from 'fusion-core';
 import {FetchToken} from 'fusion-tokens';
 import type {Fetch} from 'fusion-tokens';
-
+import {add, addToStart, getAndClear} from './event-storage';
 import Emitter from './emitter.js';
 import type {
   IEmitter,
@@ -19,7 +19,6 @@ import type {
 } from './types.js';
 
 class UniversalEmitter extends Emitter {
-  batch: any;
   flush: any;
   fetch: any;
   interval: any;
@@ -27,7 +26,6 @@ class UniversalEmitter extends Emitter {
   constructor(fetch: Fetch): void {
     super();
     //privates
-    this.batch = [];
     this.flush = this.flushInternal.bind(this);
     this.fetch = fetch;
     this.setFrequency(5000);
@@ -40,29 +38,38 @@ class UniversalEmitter extends Emitter {
   emit(type: mixed, payload: mixed): void {
     payload = super.mapEvent(type, payload);
     super.handleEvent(type, payload);
-    this.batch.push({type, payload});
+    add({type, payload});
   }
   // match server api
   from(): UniversalEmitter {
     return this;
   }
-  flushInternal(): void {
-    if (this.batch.length > 0) {
-      this.fetch('/_events', {
+  async flushInternal(): Promise<void> {
+    const items = getAndClear();
+    if (items.length === 0) return;
+
+    try {
+      const res = await this.fetch('/_events', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({items: this.batch} || []),
-      }).catch(() => {});
+        body: JSON.stringify({items}),
+      });
+
+      if (!res.ok) {
+        // sending failed so put the logs back into storage
+        addToStart(...items);
+      }
+    } catch (e) {
+      // sending failed so put the logs back into storage
+      addToStart(...items);
     }
-    this.batch = [];
   }
   teardown(): void {
     window.removeEventListener('beforeunload', this.flush);
     clearInterval(this.interval);
     this.interval = null;
-    this.batch = [];
   }
 }
 
